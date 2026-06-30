@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/OpsPortal-3/static/css/main.a45732b7.css",
+    "main.js": "/OpsPortal-3/static/js/main.0c8fa0a4.js",
+    "index.html": "/OpsPortal-3/index.html",
+    "main.a45732b7.css.map": "/OpsPortal-3/static/css/main.a45732b7.css.map",
+    "main.0c8fa0a4.js.map": "/OpsPortal-3/static/js/main.0c8fa0a4.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.a45732b7.css",
+    "static/js/main.0c8fa0a4.js"
+  ]
+}
