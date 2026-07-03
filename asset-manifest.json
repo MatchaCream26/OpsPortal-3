@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/OpsPortal-3/static/css/main.50b996e1.css",
-    "main.js": "/OpsPortal-3/static/js/main.dc66e693.js",
+    "main.css": "/OpsPortal-3/static/css/main.4f0484b4.css",
+    "main.js": "/OpsPortal-3/static/js/main.80f8d7fe.js",
     "index.html": "/OpsPortal-3/index.html",
-    "main.50b996e1.css.map": "/OpsPortal-3/static/css/main.50b996e1.css.map",
-    "main.dc66e693.js.map": "/OpsPortal-3/static/js/main.dc66e693.js.map"
+    "main.4f0484b4.css.map": "/OpsPortal-3/static/css/main.4f0484b4.css.map",
+    "main.80f8d7fe.js.map": "/OpsPortal-3/static/js/main.80f8d7fe.js.map"
   },
   "entrypoints": [
-    "static/css/main.50b996e1.css",
-    "static/js/main.dc66e693.js"
+    "static/css/main.4f0484b4.css",
+    "static/js/main.80f8d7fe.js"
   ]
 }
