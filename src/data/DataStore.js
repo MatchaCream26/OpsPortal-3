@@ -619,3 +619,136 @@ export const resetStorage = () => {
   ['ceod_currencies','ceod_transfers','ceod_faq','ceod_forum'].forEach(k => localStorage.removeItem(k));
   initLocalStorage();
 };
+
+// ============================================================
+// DATA TAMBAHAN — Kurs, Berita, Cabang, Remittance
+// ============================================================
+
+// ── Tambahan kunci LocalStorage ──────────────────────────────
+export const EXTRA_STORAGE_KEYS = {
+  RATES:    'ceod_rates',
+  RATES_HISTORY: 'ceod_rates_history',
+  NEWS:     'ceod_news',
+  BRANCHES: 'ceod_branches',
+};
+
+// ── Data kurs hari ini (dummy) ────────────────────────────────
+const TODAY = new Date();
+function dStr(daysAgo) {
+  const d = new Date(TODAY);
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
+
+// Kurs dasar mid per currency (USD = 1)
+const MID_BASE = {
+  USD: 16250, SGD: 12100, EUR: 17800, GBP: 20500,
+  JPY: 108,   AUD: 10600, CNY: 2240,  SAR: 4330,
+  HKD: 2080,  MYR: 3620,
+};
+
+const SPREAD_TT  = 0.008; // 0.8% spread TT
+const SPREAD_UKA = 0.018; // 1.8% spread UKA (banknote)
+
+function buildRate(code, mid) {
+  return {
+    code,
+    ttBuy:  Math.round(mid * (1 - SPREAD_TT)),
+    ttSell: Math.round(mid * (1 + SPREAD_TT)),
+    ukaBuy: Math.round(mid * (1 - SPREAD_UKA)),
+    ukaSell:Math.round(mid * (1 + SPREAD_UKA)),
+    mid,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export const INITIAL_RATES = Object.entries(MID_BASE).map(([code, mid]) =>
+  buildRate(code, mid)
+);
+
+// ── Historis kurs 30 hari (untuk Recharts) ───────────────────
+// Setiap item: { date: "YYYY-MM-DD", USD: mid, SGD: mid, ... }
+function generateHistory(days = 30) {
+  const history = [];
+  for (let i = days; i >= 0; i--) {
+    const entry = { date: dStr(i) };
+    Object.entries(MID_BASE).forEach(([code, baseMid]) => {
+      // Simulasi fluktuasi ±1.5% acak tapi relatif stabil
+      const drift = (Math.sin(i * 0.4 + code.charCodeAt(0)) * 0.012 +
+                     Math.cos(i * 0.7 + code.charCodeAt(1)) * 0.008);
+      entry[code] = Math.round(baseMid * (1 + drift));
+    });
+    history.push(entry);
+  }
+  return history;
+}
+export const INITIAL_RATES_HISTORY = generateHistory(30);
+
+// ── Data berita / pengumuman awal ─────────────────────────────
+export const INITIAL_NEWS = [
+  {
+    id: 1,
+    title: 'Pemberitahuan: Pembaruan Limit Transaksi BI-Fast Efektif 1 Juli 2026',
+    category: 'Regulasi',
+    priority: 'high',
+    content: `Bank Indonesia melalui Surat Edaran No.24/XX/DKSP menetapkan kenaikan batas maksimum transaksi BI-Fast dari Rp 250 juta menjadi Rp 500 juta per transaksi, efektif 1 Juli 2026.\n\nPoin penting yang perlu diperhatikan:\n- Limit baru Rp 500 juta berlaku untuk semua channel (teller, mobile, internet banking)\n- Biaya transaksi tetap Rp 2.500 (tidak berubah)\n- Nasabah tidak perlu melakukan pendaftaran ulang\n\nSosialisasikan kepada nasabah yang selama ini menggunakan RTGS untuk transaksi Rp 250–500 juta, karena kini bisa beralih ke BI-Fast dengan biaya lebih murah.`,
+    author: 'Tim Kepatuhan Bank BTN',
+    date: dStr(2),
+    tags: ['BI-Fast', 'limit', 'regulasi'],
+  },
+  {
+    id: 2,
+    title: 'WASPADA: Modus Penipuan QR Code Palsu di Loket Teller',
+    category: 'Keamanan',
+    priority: 'high',
+    content: `Ditemukan modus penipuan baru di beberapa kota: pelaku memasang QR Code palsu di atas QR Code resmi Bank BTN di area loket teller.\n\nCiri-ciri QR Code palsu:\n- Stiker QR Code ditempel di atas QR asli (terasa sedikit lebih tebal)\n- Tidak mencantumkan logo Bank BTN yang jelas\n- Tujuan pembayaran menuju rekening pribadi, bukan rekening BTN\n\nTindakan preventif:\n1. Periksa QR Code di area loket setiap pagi sebelum operasional\n2. Laporkan segera ke supervisor jika menemukan kejanggalan\n3. Edukasi nasabah untuk selalu memverifikasi nama penerima sebelum konfirmasi pembayaran`,
+    author: 'Satuan Kerja Keamanan',
+    date: dStr(5),
+    tags: ['keamanan', 'penipuan', 'QR code'],
+  },
+  {
+    id: 3,
+    title: 'Gangguan Layanan SWIFT: Beberapa Koridor Terdampak (14–15 Juli 2026)',
+    category: 'Operasional',
+    priority: 'medium',
+    content: `SWIFT melaporkan gangguan teknis pada messaging platform yang berdampak pada beberapa koridor remittance, khususnya ke Timur Tengah dan Asia Selatan.\n\nStatus terkini (per 14 Juli 2026, 09:00 WIB):\n- Koridor ke Arab Saudi (SAR): Delay 2–4 jam dari SLA normal\n- Koridor ke Pakistan & Bangladesh: Sementara ditangguhkan\n- Koridor lain: Beroperasi normal\n\nPanduan untuk teller:\n- Informasikan kepada nasabah yang hendak kirim ke negara terdampak\n- Minta nasabah mengkonfirmasi ulang keesokan harinya\n- Catat semua transaksi yang tertunda di log harian`,
+    author: 'Divisi Treasury & Correspondent Banking',
+    date: dStr(1),
+    tags: ['SWIFT', 'remittance', 'gangguan'],
+  },
+  {
+    id: 4,
+    title: 'Update Daftar Sanksi OFAC & PBB – Wajib Diperbarui di Sistem Screening',
+    category: 'Kepatuhan',
+    priority: 'high',
+    content: `Daftar sanksi terbaru dari OFAC (Office of Foreign Assets Control) dan Dewan Keamanan PBB telah diperbarui per 10 Juli 2026. Terdapat 47 entitas baru (individu dan perusahaan) yang dimasukkan ke dalam daftar sanksi global.\n\nKewajiban:\n1. Tim IT/Core Banking telah memperbarui database screening otomatis\n2. Untuk transaksi manual/override: Teller dan CS WAJIB melakukan pengecekan ulang di portal BI-SAK sebelum memproses\n3. Khusus transfer valas dan remittance: Lakukan double-check terhadap nama pengirim DAN penerima\n\nLink pengecekan: Portal BI-SAK (akses melalui intranet cabang)`,
+    author: 'Unit APU-PPT Bank BTN',
+    date: dStr(4),
+    tags: ['sanksi', 'OFAC', 'kepatuhan', 'APU-PPT'],
+  },
+];
+
+// ── Data cabang awal ──────────────────────────────────────────
+export const INITIAL_BRANCHES = [
+  { code:'BTN-KCI-001', name:'KC Utama Jakarta Selatan', region:'DKI Jakarta', type:'KC', idrLiq: 8500000000, usdLiq: 250000, eurLiq: 50000, updatedAt: dStr(0) },
+  { code:'BTN-KCI-002', name:'KC Jakarta Barat', region:'DKI Jakarta', type:'KC', idrLiq: 6200000000, usdLiq: 180000, eurLiq: 30000, updatedAt: dStr(0) },
+  { code:'BTN-KCI-003', name:'KC Jakarta Timur', region:'DKI Jakarta', type:'KC', idrLiq: 5100000000, usdLiq: 120000, eurLiq: 20000, updatedAt: dStr(1) },
+  { code:'BTN-KCI-004', name:'KC Jakarta Utara', region:'DKI Jakarta', type:'KC', idrLiq: 4300000000, usdLiq: 95000,  eurLiq: 15000, updatedAt: dStr(1) },
+  { code:'BTN-KCP-001', name:'KCP Menteng', region:'DKI Jakarta', type:'KCP', idrLiq: 1200000000, usdLiq: 30000, eurLiq: 5000, updatedAt: dStr(0) },
+  { code:'BTN-KCP-002', name:'KCP Kebayoran Baru', region:'DKI Jakarta', type:'KCP', idrLiq: 980000000, usdLiq: 25000, eurLiq: 4000, updatedAt: dStr(0) },
+  { code:'BTN-KC-SBY-001', name:'KC Surabaya Mayjen Sungkono', region:'Jawa Timur', type:'KC', idrLiq: 7800000000, usdLiq: 210000, eurLiq: 45000, updatedAt: dStr(0) },
+  { code:'BTN-KC-SBY-002', name:'KC Surabaya Rungkut', region:'Jawa Timur', type:'KC', idrLiq: 3900000000, usdLiq: 90000, eurLiq: 18000, updatedAt: dStr(1) },
+  { code:'BTN-KCP-SBY-001', name:'KCP Sidoarjo Gedangan', region:'Jawa Timur', type:'KCP', idrLiq: 850000000, usdLiq: 20000, eurLiq: 3000, updatedAt: dStr(0) },
+  { code:'BTN-KCP-SBY-002', name:'KCP Sidoarjo Waru', region:'Jawa Timur', type:'KCP', idrLiq: 720000000, usdLiq: 15000, eurLiq: 2500, updatedAt: dStr(1) },
+  { code:'BTN-KC-MLG-001', name:'KC Malang', region:'Jawa Timur', type:'KC', idrLiq: 4100000000, usdLiq: 100000, eurLiq: 20000, updatedAt: dStr(0) },
+  { code:'BTN-KC-BDG-001', name:'KC Bandung Asia Afrika', region:'Jawa Barat', type:'KC', idrLiq: 5500000000, usdLiq: 140000, eurLiq: 28000, updatedAt: dStr(0) },
+  { code:'BTN-KCP-BDG-001', name:'KCP Bandung Dago', region:'Jawa Barat', type:'KCP', idrLiq: 1100000000, usdLiq: 22000, eurLiq: 4000, updatedAt: dStr(2) },
+  { code:'BTN-KC-SMG-001', name:'KC Semarang Pemuda', region:'Jawa Tengah', type:'KC', idrLiq: 4800000000, usdLiq: 115000, eurLiq: 22000, updatedAt: dStr(0) },
+  { code:'BTN-KC-MKS-001', name:'KC Makassar Ahmad Yani', region:'Sulawesi Selatan', type:'KC', idrLiq: 3600000000, usdLiq: 80000, eurLiq: 15000, updatedAt: dStr(1) },
+  { code:'BTN-KC-MDN-001', name:'KC Medan Imam Bonjol', region:'Sumatera Utara', type:'KC', idrLiq: 5200000000, usdLiq: 125000, eurLiq: 25000, updatedAt: dStr(0) },
+  { code:'BTN-KCP-MDN-001', name:'KCP Medan Polonia', region:'Sumatera Utara', type:'KCP', idrLiq: 890000000, usdLiq: 18000, eurLiq: 3000, updatedAt: dStr(1) },
+  { code:'BTN-KC-DPS-001', name:'KC Denpasar Teuku Umar', region:'Bali', type:'KC', idrLiq: 6800000000, usdLiq: 320000, eurLiq: 80000, updatedAt: dStr(0) },
+  { code:'BTN-KCP-DPS-001', name:'KCP Kuta', region:'Bali', type:'KCP', idrLiq: 2100000000, usdLiq: 150000, eurLiq: 40000, updatedAt: dStr(0) },
+  { code:'BTN-KC-YGY-001', name:'KC Yogyakarta Sudirman', region:'DI Yogyakarta', type:'KC', idrLiq: 3200000000, usdLiq: 75000, eurLiq: 14000, updatedAt: dStr(1) },
+];
+

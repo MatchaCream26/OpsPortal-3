@@ -1,10 +1,15 @@
 // ============================================================
 // AdminCMS.js — Manajemen CMS: Tambah/Edit Valas + Upload Gambar
+//               + Update Kurs + Kelola Berita + Upload Data Cabang
 // ============================================================
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Papa from 'papaparse';
 import { useApp } from '../App';
 import { imgKey } from './CurrencyDetail';
+import {
+  EXTRA_STORAGE_KEYS, INITIAL_RATES, INITIAL_RATES_HISTORY, saveToStorage,
+} from '../data/DataStore';
 
 const CONTINENTS = ['Asia', 'Amerika', 'Eropa', 'Australia', 'Afrika'];
 
@@ -517,43 +522,465 @@ function FaqAdminPanel() {
 // ══════════════════════════════════════════════════════════════
 // Root Export — AdminCMS dengan 4 tab
 // ══════════════════════════════════════════════════════════════
-export default function AdminCMS() {
-  const [tab, setTab] = useState('upload-gambar');
+// ══════════════════════════════════════════════════════════════
+// TAB 5 — Update Kurs (Manual + CSV Upload)
+// ══════════════════════════════════════════════════════════════
+const RATE_CURRENCIES = ['USD','SGD','EUR','GBP','JPY','AUD','CNY','SAR','HKD','MYR'];
+const SPREAD_TT  = 0.008;
+const SPREAD_UKA = 0.018;
 
-  const tabs = [
-    { id: 'upload-gambar', label: '🖼️ Upload Gambar' },
-    { id: 'tambah-valas', label: '➕ Tambah Mata Uang' },
-    { id: 'edit-valas', label: '✏️ Edit Materi' },
-    { id: 'faq', label: '❓ Kelola FAQ' },
+function buildRateFromMid(code, mid) {
+  const m = Number(mid);
+  return {
+    code, mid: m,
+    ttBuy:  Math.round(m * (1 - SPREAD_TT)),
+    ttSell: Math.round(m * (1 + SPREAD_TT)),
+    ukaBuy: Math.round(m * (1 - SPREAD_UKA)),
+    ukaSell:Math.round(m * (1 + SPREAD_UKA)),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function RateAdminPanel() {
+  const { rates, setRates, ratesHistory, setRatesHistory } = useApp();
+  const fileRef = useRef(null);
+  const [manualMids, setManualMids] = useState(
+    () => Object.fromEntries((rates || INITIAL_RATES).map((r) => [r.code, r.mid]))
+  );
+  const [saved, setSaved] = useState(false);
+  const [parseMsg, setParseMsg] = useState(null);
+
+  const flash = (msg) => { setSaved(true); setParseMsg(msg || null); setTimeout(() => { setSaved(false); setParseMsg(null); }, 3500); };
+
+  // Simpan kurs manual
+  const saveManual = () => {
+    const newRates = RATE_CURRENCIES.map((code) => buildRateFromMid(code, manualMids[code] || 0));
+    setRates(newRates);
+    saveToStorage(EXTRA_STORAGE_KEYS.RATES, newRates);
+    // Tambahkan ke historis hari ini
+    const today = new Date().toISOString().slice(0, 10);
+    const entry = { date: today };
+    RATE_CURRENCIES.forEach((code) => { entry[code] = Number(manualMids[code] || 0); });
+    const hist = [...(ratesHistory || INITIAL_RATES_HISTORY).filter((h) => h.date !== today), entry];
+    setRatesHistory(hist);
+    saveToStorage(EXTRA_STORAGE_KEYS.RATES_HISTORY, hist);
+    flash('Kurs berhasil diperbarui.');
+  };
+
+  // Download template CSV
+  const downloadTemplate = () => {
+    const header = 'code,mid\n';
+    const rows = RATE_CURRENCIES.map((c) => `${c},${manualMids[c] || 0}`).join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'template_kurs_ceod.csv';
+    a.click();
+  };
+
+  // Upload CSV via FileReader + PapaParse
+  const handleCSV = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = Papa.parse(ev.target.result, { header: true, skipEmptyLines: true });
+      const updates = {};
+      let count = 0;
+      result.data.forEach((row) => {
+        const code = (row.code || row.CODE || '').toUpperCase().trim();
+        const mid  = parseFloat(row.mid || row.MID || 0);
+        if (RATE_CURRENCIES.includes(code) && mid > 0) { updates[code] = mid; count++; }
+      });
+      if (count === 0) { setParseMsg('⚠️ Tidak ada data valid ditemukan. Pastikan kolom: code, mid'); return; }
+      const merged = { ...manualMids, ...updates };
+      setManualMids(merged);
+      flash(`✓ ${count} mata uang berhasil di-parse dari CSV. Klik "Simpan" untuk menyimpan.`);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, [manualMids]);
+
+  return (
+    <div className="space-y-5">
+      {(saved || parseMsg) && (
+        <div className={`p-3 rounded-xl text-sm ${parseMsg?.startsWith('⚠️') ? 'bg-amber-50 text-amber-700' : 'bg-mint-50 text-mint-600'}`}>
+          {parseMsg || '✓ Perubahan berhasil disimpan.'}
+        </div>
+      )}
+
+      {/* Upload CSV */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="font-semibold text-gray-700 mb-3">Import Kurs dari CSV</div>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button onClick={downloadTemplate} className="flex-1 py-2.5 rounded-xl border border-primary-200 bg-primary-50 text-primary-600 text-sm font-medium hover:bg-primary-100">
+            📥 Download Template CSV
+          </button>
+          <button onClick={() => fileRef.current?.click()} className="flex-1 py-2.5 rounded-xl border border-mint-200 bg-mint-50 text-mint-600 text-sm font-medium hover:bg-mint-100">
+            📤 Upload CSV / Excel
+          </button>
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleCSV} className="hidden" />
+        </div>
+        <div className="mt-2 text-[11px] text-gray-400">Format kolom: <code className="bg-gray-100 px-1 rounded">code</code> (USD/SGD/...) dan <code className="bg-gray-100 px-1 rounded">mid</code> (kurs tengah IDR)</div>
+      </div>
+
+      {/* Form manual */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="font-semibold text-gray-700 mb-1">Input Manual Kurs Tengah (IDR)</div>
+        <div className="text-xs text-gray-400 mb-4">Spread otomatis: TT ±0.8%, UKA ±1.8%</div>
+        <div className="grid sm:grid-cols-2 gap-3 mb-4">
+          {RATE_CURRENCIES.map((code) => (
+            <div key={code} className="flex items-center gap-2">
+              <span className="w-12 text-xs font-bold text-gray-600 flex-shrink-0">{code}</span>
+              <input
+                type="number"
+                value={manualMids[code] || ''}
+                onChange={(e) => setManualMids((prev) => ({ ...prev, [code]: e.target.value }))}
+                placeholder="Kurs tengah IDR"
+                className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-primary-300"
+              />
+            </div>
+          ))}
+        </div>
+        <button onClick={saveManual} className="w-full py-2.5 rounded-xl bg-primary-500 text-white text-sm font-semibold shadow-sm hover:bg-primary-600">
+          💾 Simpan & Perbarui Kurs
+        </button>
+      </div>
+
+      {/* Preview hasil */}
+      {rates?.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-4 border-b border-gray-50 text-sm font-semibold text-gray-700">Preview Kurs Saat Ini</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[500px]">
+              <thead><tr className="border-b border-gray-100 bg-gray-50">{['Kode','Mid','TT Beli','TT Jual','UKA Beli','UKA Jual'].map((h) => <th key={h} className="text-left p-3 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>)}</tr></thead>
+              <tbody>
+                {rates.map((r) => (
+                  <tr key={r.code} className="border-b border-gray-50 last:border-0">
+                    <td className="p-3 font-bold text-gray-700">{r.code}</td>
+                    <td className="p-3 text-gray-500">{r.mid?.toLocaleString('id-ID')}</td>
+                    <td className="p-3 text-mint-600">{r.ttBuy?.toLocaleString('id-ID')}</td>
+                    <td className="p-3 text-red-500">{r.ttSell?.toLocaleString('id-ID')}</td>
+                    <td className="p-3 text-mint-700">{r.ukaBuy?.toLocaleString('id-ID')}</td>
+                    <td className="p-3 text-red-400">{r.ukaSell?.toLocaleString('id-ID')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 6 — Kelola Berita / Pengumuman
+// ══════════════════════════════════════════════════════════════
+const EMPTY_NEWS = { title: '', category: 'Operasional', priority: 'medium', content: '', author: '', date: new Date().toISOString().slice(0, 10), tags: '' };
+const NEWS_CATEGORIES = ['Regulasi', 'Keamanan', 'Operasional', 'Kepatuhan', 'Umum'];
+
+function NewsAdminPanel() {
+  const { news, addNews, updateNews, deleteNews } = useApp();
+  const [editing, setEditing] = useState(null); // null = tambah baru, id = edit
+  const [draft, setDraft] = useState(EMPTY_NEWS);
+
+  const startEdit = (item) => {
+    setEditing(item.id);
+    setDraft({ ...item, tags: (item.tags || []).join(', ') });
+  };
+  const cancelEdit = () => { setEditing(null); setDraft(EMPTY_NEWS); };
+
+  const save = () => {
+    if (!draft.title.trim() || !draft.content.trim()) return;
+    const payload = { ...draft, tags: draft.tags.split(',').map((t) => t.trim()).filter(Boolean) };
+    if (editing !== null) updateNews({ ...payload, id: editing });
+    else addNews(payload);
+    cancelEdit();
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Form tambah/edit */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="font-semibold text-gray-700 mb-4">{editing !== null ? 'Edit Pengumuman' : 'Buat Pengumuman Baru'}</div>
+        <div className="grid sm:grid-cols-2 gap-3 mb-3">
+          <input value={draft.title} onChange={(e) => setDraft({...draft, title: e.target.value})} placeholder="Judul pengumuman" className="px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-primary-300 sm:col-span-2" />
+          <select value={draft.category} onChange={(e) => setDraft({...draft, category: e.target.value})} className="px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none bg-white focus:ring-2 focus:ring-primary-300">
+            {NEWS_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={draft.priority} onChange={(e) => setDraft({...draft, priority: e.target.value})} className="px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none bg-white focus:ring-2 focus:ring-primary-300">
+            <option value="high">⚠️ Penting / High</option>
+            <option value="medium">ℹ️ Info / Medium</option>
+            <option value="low">📄 Umum / Low</option>
+          </select>
+          <input value={draft.author} onChange={(e) => setDraft({...draft, author: e.target.value})} placeholder="Penulis / Unit" className="px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-primary-300" />
+          <input type="date" value={draft.date} onChange={(e) => setDraft({...draft, date: e.target.value})} className="px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-primary-300" />
+          <textarea value={draft.content} onChange={(e) => setDraft({...draft, content: e.target.value})} placeholder="Isi pengumuman lengkap..." rows={6} className="px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-primary-300 resize-none sm:col-span-2" />
+          <input value={draft.tags} onChange={(e) => setDraft({...draft, tags: e.target.value})} placeholder="Tags (pisahkan koma)" className="px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none focus:ring-2 focus:ring-primary-300 sm:col-span-2" />
+        </div>
+        <div className="flex gap-2">
+          <button onClick={save} className="px-5 py-2.5 rounded-xl bg-primary-500 text-white text-sm font-medium shadow-sm hover:bg-primary-600">
+            {editing !== null ? 'Simpan Perubahan' : '+ Publikasikan'}
+          </button>
+          {editing !== null && <button onClick={cancelEdit} className="px-5 py-2.5 rounded-xl text-sm text-gray-500 hover:bg-gray-50">Batal</button>}
+        </div>
+      </div>
+
+      {/* Daftar berita */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="font-semibold text-gray-700 mb-4">Daftar Pengumuman ({(news || []).length})</div>
+        <div className="space-y-2">
+          {(news || []).sort((a, b) => new Date(b.date) - new Date(a.date)).map((item) => (
+            <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-gray-700 truncate">{item.title}</div>
+                <div className="text-[10px] text-gray-400">{item.category} · {item.date} · {item.priority === 'high' ? '⚠️ Penting' : item.priority === 'medium' ? 'ℹ️ Info' : '📄 Umum'}</div>
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                <button onClick={() => startEdit(item)} className="text-xs text-primary-500 hover:underline">Edit</button>
+                <button onClick={() => { if (window.confirm('Hapus pengumuman ini?')) deleteNews(item.id); }} className="text-xs text-red-500 hover:underline">Hapus</button>
+              </div>
+            </div>
+          ))}
+          {!(news || []).length && <div className="text-sm text-gray-400 italic text-center py-4">Belum ada pengumuman.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAB 7 — Upload Data & Likuiditas Cabang
+// ══════════════════════════════════════════════════════════════
+const BRANCH_COLUMNS = 'code,name,region,type,idrLiq,usdLiq,eurLiq';
+const LIQUIDITY_COLUMNS = 'code,idrLiq,usdLiq,eurLiq';
+
+function BranchAdminPanel() {
+  const { branches, setBranches } = useApp();
+  const masterRef = useRef(null);
+  const liqRef = useRef(null);
+  const [msg, setMsg] = useState(null);
+  const [msgType, setMsgType] = useState('success');
+
+  const flash = (text, type = 'success') => { setMsg(text); setMsgType(type); setTimeout(() => setMsg(null), 4000); };
+
+  const downloadSampleMaster = () => {
+    const sample = `code,name,region,type,idrLiq,usdLiq,eurLiq
+BTN-KC-XXX-001,KC Kota Baru,DKI Jakarta,KC,5000000000,150000,30000
+BTN-KCP-XXX-001,KCP Kota Baru A,DKI Jakarta,KCP,800000000,20000,5000`;
+    const blob = new Blob([sample], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'template_master_cabang.csv';
+    a.click();
+  };
+
+  const downloadSampleLiquidity = () => {
+    const rows = (branches || []).slice(0, 5).map((b) => `${b.code},${b.idrLiq},${b.usdLiq},${b.eurLiq}`).join('\n');
+    const blob = new Blob([LIQUIDITY_COLUMNS + '\n' + rows], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'template_update_likuiditas.csv';
+    a.click();
+  };
+
+  // Upload master data cabang baru
+  const handleMasterUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = Papa.parse(ev.target.result, { header: true, skipEmptyLines: true, dynamicTyping: true });
+      const newBranches = result.data
+        .filter((row) => row.code && row.name)
+        .map((row) => ({
+          code: String(row.code).trim(),
+          name: String(row.name).trim(),
+          region: String(row.region || '').trim(),
+          type: String(row.type || 'KC').trim(),
+          idrLiq: Number(row.idrLiq || 0),
+          usdLiq: Number(row.usdLiq || 0),
+          eurLiq: Number(row.eurLiq || 0),
+          updatedAt: new Date().toISOString().slice(0, 10),
+        }));
+      if (!newBranches.length) { flash('⚠️ Tidak ada data valid ditemukan. Periksa format kolom.', 'warn'); return; }
+      // Merge: cabang baru ditambahkan, yang sudah ada di-overwrite
+      const existingCodes = new Set(newBranches.map((b) => b.code));
+      const merged = [
+        ...(branches || []).filter((b) => !existingCodes.has(b.code)),
+        ...newBranches,
+      ];
+      setBranches(merged);
+      saveToStorage(EXTRA_STORAGE_KEYS.BRANCHES, merged);
+      flash(`✓ ${newBranches.length} cabang berhasil diimpor/diperbarui.`);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // Upload update likuiditas saja (hanya update field idrLiq, usdLiq, eurLiq)
+  const handleLiquidityUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const result = Papa.parse(ev.target.result, { header: true, skipEmptyLines: true, dynamicTyping: true });
+      let count = 0;
+      const today = new Date().toISOString().slice(0, 10);
+      const updated = (branches || []).map((b) => {
+        const row = result.data.find((r) => String(r.code).trim() === b.code);
+        if (!row) return b;
+        count++;
+        return {
+          ...b,
+          idrLiq: Number(row.idrLiq ?? b.idrLiq),
+          usdLiq: Number(row.usdLiq ?? b.usdLiq),
+          eurLiq: Number(row.eurLiq ?? b.eurLiq),
+          updatedAt: today,
+        };
+      });
+      if (!count) { flash('⚠️ Tidak ada kode cabang yang cocok ditemukan.', 'warn'); return; }
+      setBranches(updated);
+      saveToStorage(EXTRA_STORAGE_KEYS.BRANCHES, updated);
+      flash(`✓ ${count} cabang berhasil diperbarui nominalnya.`);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  return (
+    <div className="space-y-5">
+      {msg && (
+        <div className={`p-3 rounded-xl text-sm ${msgType === 'warn' ? 'bg-amber-50 text-amber-700' : 'bg-mint-50 text-mint-600'}`}>{msg}</div>
+      )}
+
+      {/* Upload master cabang */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="font-semibold text-gray-700 mb-1">📂 Import Master Data Cabang</div>
+        <div className="text-xs text-gray-400 mb-3">Upload CSV berisi daftar KC/KCP baru atau data yang diperbarui. Kode yang sudah ada akan di-overwrite.</div>
+        <div className="flex flex-col sm:flex-row gap-3 mb-3">
+          <button onClick={downloadSampleMaster} className="flex-1 py-2.5 rounded-xl border border-primary-200 bg-primary-50 text-primary-600 text-sm font-medium hover:bg-primary-100">
+            📥 Download Template Master
+          </button>
+          <button onClick={() => masterRef.current?.click()} className="flex-1 py-2.5 rounded-xl border border-mint-200 bg-mint-50 text-mint-600 text-sm font-medium hover:bg-mint-100">
+            📤 Upload CSV Master
+          </button>
+          <input ref={masterRef} type="file" accept=".csv" onChange={handleMasterUpload} className="hidden" />
+        </div>
+        <div className="text-[11px] text-gray-400">Kolom wajib: <code className="bg-gray-100 px-1 rounded">{BRANCH_COLUMNS}</code></div>
+      </div>
+
+      {/* Upload update likuiditas */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="font-semibold text-gray-700 mb-1">💰 Update Nominal Likuiditas Berkala</div>
+        <div className="text-xs text-gray-400 mb-3">Upload CSV berisi kode cabang dan nominal saldo terbaru. Hanya kolom nominal yang diperbarui, data cabang lainnya tidak berubah.</div>
+        <div className="flex flex-col sm:flex-row gap-3 mb-3">
+          <button onClick={downloadSampleLiquidity} className="flex-1 py-2.5 rounded-xl border border-primary-200 bg-primary-50 text-primary-600 text-sm font-medium hover:bg-primary-100">
+            📥 Download Template Likuiditas
+          </button>
+          <button onClick={() => liqRef.current?.click()} className="flex-1 py-2.5 rounded-xl border border-accent-200 bg-accent-50 text-accent-600 text-sm font-medium hover:bg-accent-100">
+            📤 Upload CSV Likuiditas
+          </button>
+          <input ref={liqRef} type="file" accept=".csv" onChange={handleLiquidityUpload} className="hidden" />
+        </div>
+        <div className="text-[11px] text-gray-400">Kolom wajib: <code className="bg-gray-100 px-1 rounded">{LIQUIDITY_COLUMNS}</code></div>
+      </div>
+
+      {/* Ringkasan cabang terdaftar */}
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="font-semibold text-gray-700 mb-3">Database Cabang Terdaftar ({(branches || []).length})</div>
+        <div className="overflow-x-auto max-h-72 overflow-y-auto">
+          <table className="w-full text-xs min-w-[500px]">
+            <thead className="sticky top-0 bg-white">
+              <tr className="border-b border-gray-100">
+                {['Kode', 'Nama', 'Wilayah', 'Tipe', 'IDR Likuiditas', 'Update'].map((h) => (
+                  <th key={h} className="text-left p-2 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(branches || []).map((b) => (
+                <tr key={b.code} className="border-b border-gray-50 last:border-0">
+                  <td className="p-2 font-mono text-gray-500 text-[10px]">{b.code}</td>
+                  <td className="p-2 text-gray-700">{b.name}</td>
+                  <td className="p-2 text-gray-500">{b.region}</td>
+                  <td className="p-2"><span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${b.type === 'KC' ? 'bg-primary-100 text-primary-600' : 'bg-accent-100 text-accent-600'}`}>{b.type}</span></td>
+                  <td className="p-2 text-gray-600">{b.idrLiq?.toLocaleString('id-ID')}</td>
+                  <td className="p-2 text-gray-400">{b.updatedAt}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Root Export — AdminCMS dengan 7 tab total
+// ══════════════════════════════════════════════════════════════
+export default function AdminCMS() {
+  const [tab, setTab] = useState('update-kurs');
+
+  const TAB_GROUPS = [
+    {
+      label: 'Data & Konten',
+      tabs: [
+        { id: 'update-kurs',   label: '📊 Update Kurs' },
+        { id: 'kelola-berita', label: '📢 Kelola Berita' },
+        { id: 'cabang',        label: '🏦 Data Cabang' },
+      ],
+    },
+    {
+      label: 'Valas & Materi',
+      tabs: [
+        { id: 'upload-gambar', label: '🖼️ Upload Gambar' },
+        { id: 'tambah-valas',  label: '➕ Tambah Valas' },
+        { id: 'edit-valas',    label: '✏️ Edit Materi' },
+        { id: 'faq',           label: '❓ Kelola FAQ' },
+      ],
+    },
   ];
+
 
   return (
     <div className="animate-fade-in">
       <div className="mb-6">
         <h1 className="text-2xl font-display font-bold text-gray-800 mb-1">Manajemen CMS</h1>
-        <p className="text-sm text-gray-400">Khusus Supervisor/Admin — kelola materi portal secara dinamis</p>
+        <p className="text-sm text-gray-400">Khusus Supervisor/Admin — kelola materi, kurs, berita, dan data cabang</p>
       </div>
 
-      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-2xl overflow-x-auto">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`flex-1 min-w-max px-3 py-2 text-xs font-semibold rounded-xl transition-all whitespace-nowrap ${
-              tab === t.id
-                ? 'bg-white text-primary-600 shadow-sm'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {t.label}
-          </button>
+      {/* Tab groups */}
+      <div className="space-y-2 mb-6">
+        {TAB_GROUPS.map((group) => (
+          <div key={group.label}>
+            <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1 mb-1">{group.label}</div>
+            <div className="flex gap-1 bg-gray-100 p-1 rounded-2xl overflow-x-auto">
+              {group.tabs.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`flex-1 min-w-max px-3 py-2 text-xs font-semibold rounded-xl transition-all whitespace-nowrap ${
+                    tab === t.id ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
 
+      {tab === 'update-kurs'   && <RateAdminPanel />}
+      {tab === 'kelola-berita' && <NewsAdminPanel />}
+      {tab === 'cabang'        && <BranchAdminPanel />}
       {tab === 'upload-gambar' && <ImageUploadPanel />}
-      {tab === 'tambah-valas' && <AddCurrencyForm />}
-      {tab === 'edit-valas' && <EditCurrencyPanel />}
-      {tab === 'faq' && <FaqAdminPanel />}
+      {tab === 'tambah-valas'  && <AddCurrencyForm />}
+      {tab === 'edit-valas'    && <EditCurrencyPanel />}
+      {tab === 'faq'           && <FaqAdminPanel />}
     </div>
   );
 }
